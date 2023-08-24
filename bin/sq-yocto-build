@@ -1,0 +1,245 @@
+#!/bin/bash
+
+set -e
+
+YOCTO_ENV_VERSION="0.1"
+
+call_help()
+{
+    # Commands and parameters list is used by bash completition
+    # See ../scripts/completion.bash for more info
+    echo "  clean                              	- clean workdir"
+    echo "  deploy                             	- deply target image"
+    echo "  run                                	- run QEMU (console only)"
+    echo "  graph <recepie> <PATH>             	- build graph. PATH is the path how to name and place the result dot file"
+    echo "  deploy [<deploy_params>]           	- deploy built image"
+    echo "  sync [<sync_params>]               	- sync sources"
+    echo "  shell|-- [<CMD>]                   	- launches shell inside the docker with optional command CMD"
+    echo "  <deploy_params>                    	- deploy parameters NOT_IMEPLENTED"
+    echo "    --image                          	- set image to flash"
+    echo "    --device                         	- set device"
+    echo "  <sync_params>                      	- sync parameters"
+    echo "    state                            	- get state of working directory"
+    echo "    workspace                        	- additionally do build of workdir"
+}
+
+call_host()
+{
+    DOCKER_IMAGE=${DOCKER_IMAGE:-yocto_builder}
+    YOCTO_VOL=${YOCTO_VOL:-$PWD}
+
+    # append pwd to extra args to run command in current path
+    if [ "$1" = "--" ]; then
+        if [[ ! $PWD =~ ^$YOCTO_VOL ]]; then
+            sq_err "You are not inside $YOCTO_VOL"
+            exit 1
+        fi
+        DOCKER_WORKDIR="/yocto${PWD#$YOCTO_VOL}"
+    fi
+
+    DOCKER_VOLUMES+=";${YOCTO_VOL}:/yocto"
+    [ -n "${YOCTO_DNLD}" ] && DOCKER_VOLUMES+=";$(realpath ${YOCTO_DNLD}):/downloads"
+
+    if [ "$1" == "run" ]; then
+        DOCKER_DEVS+=";/dev/net/tun:/dev/net/tun"
+#QEMU brings up tun interface and requires sysfs in rw mode. it is partially possible to solve this with --cap-add=NET_ADMIN but I do not know how to make sysfs writable. therefore --privilegeg
+        DOCKER_ARGS+=" --privileged"
+    fi
+
+    if [ "$1" == "deploy" ]; then
+        # searching for external device
+        message='Searching for SDCard...'
+        echo $message
+
+        entry_options=()
+        i=0
+        while IFS=" " read -r name size hotplug model; do
+            if [ "$hotplug" == "1" ]; then
+                entry_options+=("${i}:")
+                entry_options+=("\t")
+                entry_options+=("$name")
+                entry_options+=("\t")
+                entry_options+=("($size) \t$model")
+                entry_options+=("\n")
+                ((i+=1))
+            fi
+        done < <(lsblk -pnd -o NAME,SIZE,HOTPLUG,MODEL)
+
+        if [ ${#entry_options[@]} -eq 0 ]; then
+            echo "ERROR: There are no suitable devices"
+            exit 1
+        fi
+        unset entry_options[-1]
+
+        devices=${entry_options[@]}
+        message='Select the device on which the firmware will be written \nWARNING: Make sure that you have selected the correct device. All data on this device will be deleted'
+        echo -e "$message \n $devices"
+        read -p "Enter device number: " device_num
+        device_name=""
+        for i in ${!entry_options[@]}; do
+            if [ "${entry_options[$i]}" = "$device_num:" ]; then
+                device_name=${entry_options[$((i+2))]}
+            fi
+        done
+
+        if [ -z "$device_name" ]; then
+            sq_err "ERROR: selected device does not exist"
+            exit 1
+        fi
+
+        echo "Unmounting all mounted filesystems at the $device_name..."
+        grep "^$device_name" /proc/mounts | cut -f1 -d' ' | xargs -r sudo umount
+
+        DOCKER_DEVS+=";$device_name"
+    fi
+}
+
+call_docker()
+{
+    cpus=$(grep ^processor /proc/cpuinfo | wc -l)
+    pushd /yocto > /dev/null 2>&1
+    YOCTO_CONF_VERSION=""
+    echo "Prepare YOCTO dev environment"
+    if ! source project.setup ; then
+        echo "The dir does not contain project.setup or it's broken. Can't download sources"
+        exit 1
+    fi
+
+    MAJOR_ENV_VERSION=$(echo $YOCTO_ENV_VERSION | cut -d. -f1)
+    MAJOR_CONF_VERSION=$(echo $YOCTO_CONF_VERSION | cut -d. -f1)
+
+    if [ "$MAJOR_ENV_VERSION" != "$MAJOR_CONF_VERSION" ]; then
+        if [ -z "$MAJOR_CONF_VERSION" ]; then
+            echo "Set YOCTO_CONF_VERSION variable in project.setup"
+        else
+            echo "Config versions are incompatible, Your is $MAJOR_CONF_VERSION. Env is $MAJOR_ENV_VERSION."
+            echo "Read the history of changes in README.md and update project.setup"
+        fi
+        exit 1
+    fi
+
+    [ -d "/downloads" ] && export DL_DIR="/downloads"
+
+    if [ "$#" -eq 0 ]; then
+        echo "Build default Yocto recipe"
+        # check for existing sources and do sync as needed
+        STATE=$(do_state)
+        if [ "$STATE" == "empty" ]; then
+            echo "'$PWD' dir does not contain sources. Syncing.."
+            do_init
+        fi
+        if [ "$STATE" != "ready" ]; then
+            do_sync
+            cd /yocto
+            do_prepare
+            cd /yocto
+            do_workspace
+            cd /yocto
+        else
+            do_prepare
+            cd /yocto
+        fi
+        cd /yocto
+        do_build
+        exit $?
+    fi
+
+    do_prepare
+    popd > /dev/null 2>&1
+
+    case $1 in
+        deploy)
+            #TODO: Need to be reimplemented. Again. At least moved to script dir
+            IMAGES_DIR="build/tmp/deploy/images"
+
+            device=${1}
+            images=($(bitbake -e | grep '^IMAGE_FSTYPES=' | sed -E "s/.*IMAGE_FSTYPES.*=.*[\"\'](.*)[\"\'].*/\1/"))
+            if [ ${#images[@]} -eq 0 ]; then
+                echo "No images"
+                exit 1
+            fi
+
+            echo "Available images"
+            for i in ${!images[@]}; do
+                ext=${images[$i]}
+                if [ "$ext" = "live" ]; then
+                    ext="iso"
+                fi
+                echo " $i: $(basename $(find $IMAGES_DIR -type f -name "*.$ext"))"
+            done
+
+            read -p "Select the image to flash: " image_index
+
+            number_re='^[0-9]+$'
+            if ! [[ $image_index =~ $number_re ]] || (( $image_index > $i )); then
+                echo "Incorrect image number"
+                exit 1
+            fi
+
+            img_type=${images[$image_index]}
+            if [ "$img_type" != "ext3" ] && [ "$img_type" != "rpi-sdimg" ]; then
+                echo "This image currently not supported, only ext3 and rpi-sdimg are allowed"
+                exit 1
+            fi
+
+            image=$(find $IMAGES_DIR -type f -name "*.$ext")
+
+            image_size=$(stat -Lc%s "$image")
+            sudo echo "Image size: $image_size bytes"
+
+            echo "Flashing..."
+            sudo bmaptool copy --nobmap "$image" $device
+
+            ;;
+        graph)
+            shift
+            bitbake -g $1
+            dependency-graph "task-depends.dot" "$@"
+            echo "Graph builder finished for $1, see dependency-graph.dot"
+            rm task-depends.dot
+            ;;
+        sync)
+            shift
+            if [ "$1" == "state" ];then
+                 do_state
+                 exit 0
+            fi
+            cd /yocto
+            do_sync "$@"
+            cd /yocto
+            if [ "$1" == "workspace" ];then
+                 shift
+                 do_workspace
+            fi
+            ;;
+        run)
+            shift
+            runqemu qemuparams="-device virtio-serial-device -chardev null,id=virtcon -device virtconsole,chardev=virtcon" nographic "$@"
+            ;;
+        clean)
+            shift
+            do_clean "$@"
+            ;;
+        shell|--)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "Enterring shell"
+                bash
+            else
+                echo "Execute command '$@' by path '$PWD'"
+                eval $@
+            fi
+            ;;
+        *)
+            echo "Execute bitbake with '$@' params"
+            bitbake $@
+            ;;
+    esac
+}
+
+if [ "$(basename $0)" == "docker_launcher.sh" ]; then
+    call_docker "$@"
+else
+    source $(cd $(dirname $0) && pwd -P)/../scripts/common-launcher "$@"
+fi
+

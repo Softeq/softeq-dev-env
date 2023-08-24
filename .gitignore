@@ -1,0 +1,6 @@
+# exclude contents of examples folder from scan
+examples/*
+# un-exclude file from excluded folder
+!examples/README.md
+# un-exclude subfolder from excluded folder
+#!examples/cmake/

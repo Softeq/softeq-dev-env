@@ -1,0 +1,146 @@
+#!/usr/bin/python3
+import argparse
+from ast import arg
+import networkx as nx
+from networkx.drawing import nx_agraph
+from networkx.drawing.nx_pydot import write_dot
+from pygraphviz import AGraph
+
+INCLUDED_TASKS = ["do_rootfs", "do_packagedata", "do_package", "do_write_rpm"]
+EXCLUDED_VERTEXES = []
+
+ROOT_TASK = None # fills by node name if node has a do_rootfs rask
+
+def get_task(line: str):
+    return line.split()[0].split('.')[1][:-1]
+
+
+def get_name(line: str):
+    return line.split()[0].split('.')[0][1:]
+
+
+def get_dependency_name(line: str):
+    return line.split()[2].split('.')[0][1:]
+
+
+def get_dependency_task(line: str):
+    return line.split()[2].split('.')[1][:-1]
+
+
+def is_edge(line: str):
+    return " -> " in line
+
+
+def is_node(line: str):
+    return "label" in line
+
+
+def is_root_node(task: str):
+    return task == "do_rootfs"
+
+
+def filter(line):
+    if "native" in line:
+        return False
+    name = ""
+    task = ""
+    if is_node(line):
+        name = get_name(line)
+        task = get_task(line)
+        if is_root_node(task):
+            global ROOT_TASK
+            ROOT_TASK = name
+    elif is_edge(line):
+        name = get_dependency_name(line)
+        task = get_dependency_task(line)
+    else:
+        return False
+    if task in INCLUDED_TASKS and name not in EXCLUDED_VERTEXES:
+        return True
+    return False
+
+
+def simplify_line(line):
+    name = get_name(line)
+    if " -> " in line:
+        depends_by = get_dependency_name(line)
+        if name == depends_by:
+            return False
+        return '"' + name + '" -> "' + depends_by + '"\r\n'
+    return '"' + name + '" [label="' + name + '"]\r\n'
+
+
+def filter_graph_file(file_path):
+    dictionary = []
+    file = open(file_path)
+    source = file.readline()
+    line = file.readline()
+    while line:
+        if is_node(line) and filter(line):
+            name = get_name(line)
+            if name not in dictionary:
+                dictionary.append(name)
+                source += simplify_line(line)
+            line = file.readline()
+            while is_edge(line):
+                if filter(line):
+                    line = simplify_line(line)
+                    if line:
+                        source += line
+                line = file.readline()
+        else:
+            line = file.readline()
+    source += "}"
+    file.close()
+    return source
+
+
+def create_subgraph(graph: nx.DiGraph, subgraph: nx.DiGraph, start_node, dept):
+    node_list = graph.successors(start_node)
+    if dept > 0:
+        dept -= 1
+        for n in node_list:
+            subgraph.add_edge(start_node, n)
+            create_subgraph(graph, subgraph, n, dept)
+    dept += 1
+    return subgraph
+
+
+def get_subgraph(graph: nx.DiGraph, root_node, dept):
+    if dept is None:
+        dept = graph.number_of_nodes()
+    root_node = root_node.replace(' ', '')
+    subgraph = nx.DiGraph()
+    subgraph = create_subgraph(graph, subgraph, root_node, dept)
+    subgraph.graph.setdefault('graph', {})['rankdir'] = 'LR'
+    return subgraph
+
+
+if __name__ == '__main__':
+    arg_parser = argparse.ArgumentParser( description='Displays a dependency graph for recipe')
+    arg_parser.add_argument("path", type=str, help='Path to task-depends.dot')
+    arg_parser.add_argument("recipe", type=str, help='Recipe name')
+    arg_parser.add_argument("-d", "--dept", type=int, help='Dept of graph')
+    arg_parser.add_argument("-t", "--include_tasks", nargs='+', default=[] , help='Include-tasks')
+    arg_parser.add_argument("-e", "--exclude_recipes", nargs='+', default=[], help='Dept of graph')
+    args = arg_parser.parse_args()
+    
+    if len(args.include_tasks) != 0:
+        INCLUDED_TASKS = args.include_tasks
+    if len(args.exclude_recipes) != 0:
+        EXCLUDED_VERTEXES = args.exclude_recipes
+    
+    with open('dependency-graph.dot', 'w+') as outfile:
+        write_dot(
+            get_subgraph(
+                nx_agraph.from_agraph(
+                    AGraph(
+                        filter_graph_file(args.path)
+                    )
+                ),
+                args.recipe,
+                args.dept
+            ),
+            outfile
+        )
+

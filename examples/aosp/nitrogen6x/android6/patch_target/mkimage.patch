@@ -1,0 +1,4 @@
+61c61
+< mkpart system 40.1 642 \
+---
+> mkpart system 40,1 642 \

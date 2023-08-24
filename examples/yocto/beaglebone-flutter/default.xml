@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <default revision="dunfell" sync-j="4"/>
+  <remote name="yocto" fetch="https://git.yoctoproject.org/git/" />
+  <remote name="openembedded" fetch="https://github.com/openembedded/"/>
+  <remote name="clang" fetch="https://github.com/kraj/"/>
+  <remote name="flutter" fetch="https://github.com/meta-flutter/"/>
+  <remote name="qt5" fetch="https://github.com/meta-qt5"/>
+
+  <project path="sources/poky" name="poky" remote="yocto"/>
+  <project path="sources/meta-arm" name="meta-arm" remote="yocto"/>
+  <project path="sources/meta-ti" name="meta-ti" remote="yocto"/>
+  <project path="sources/meta-arago" name="meta-arago" remote="yocto"/>
+  <project path="sources/meta-qt5" name="meta-qt5" remote="qt5"/>
+  <project path="sources/meta-openembedded" name="meta-openembedded" remote="openembedded"/>
+  <project path="sources/meta-clang" name="meta-clang" remote="clang"/>
+  <project path="sources/meta-flutter" name="meta-flutter" remote="flutter"/>
+</manifest>

@@ -1,0 +1,251 @@
+#!/bin/bash
+
+set -e
+
+call_help()
+{
+    # Commands and parameters list is used by bash completition
+    # See ../scripts/completion.bash for more info
+    echo "  [build] [<target>] [<make_params>] 	- builds current configuration"
+    echo "  dev [<cmake_params>]               	- configures and build debug configuration"
+    echo "  prod [<cmake_params>]              	- configures and build release configuration"
+    echo "  clean                              	- cleans all configurations"
+    echo "  test [<test_params>]               	- runs unit tests"
+    echo "  test_memcheck [<test_params>]      	- runs unit tests with valgrind"
+    echo "  dry-run [<install_params>]         	- builds release installs it and checks it based on examples"
+    echo "  coverage [<test_params>]           	- gets test coverage report"
+    echo "  debug|dbg <PATH> [<gdb_params>]    	- launches debuuger"
+    echo "  sonar_build [<cmake_params>]       	- launches build with sonar wrapper"
+    echo "  sonar_test [<test_params>]         	- launches tests and coverage for sonar"
+    echo "  sonar_scan [<sonar_params>]        	- launches sonar scanner"
+    echo "  package [<cmake_params>]           	- prepares distribution package"
+    echo "  docker [<docker_params>]           	- builds and install docker images"
+    echo "  shell|-- [<CMD>]                   	- launches shell inside the docker with optional command CMD"
+    echo "  <cmake_params>                     	- is additional parameters to cmake call"
+    echo "    -D                               	- Define a variable"
+    echo "    -DBUILD_ALL=ON                   	- enable everything for the build"
+    echo "    -DCMAKE_INSTALL_PREFIX=<PATH>    	- set install path"
+    echo "    --graphviz=<PATH>                	- Generate graphviz of dependencies"
+    echo "  <target>                           	- is additional parameters to make call"
+    echo "    help                             	- show make targets"
+    echo "    install                          	- install to "
+    echo "    edit_cache                       	- modify options"
+    echo "  <make_params>                      	- is additional parameters to make call"
+    echo "    VERBOSE=1                        	- verbose mode for make commands"
+    echo "  <test_params>                      	- is additional parameters to cmake call"
+    echo "    -R <REGEX>                       	- Run tests matching regular expression."
+    echo "    -E <REGEX>                       	- Exclude tests matching regular expression."
+    echo "    -N                               	- Show tests"
+    echo "    --timeout <seconds>              	- Set the default test timeout."
+    echo "  <gdb_params>                       	- parameters to gdb"
+    echo "    --args=                          	- set command line params to call under debug"
+    echo "  <sonar_params>                     	- parameters to sonar"
+    echo "    SONAR_BRANCH=                    	- specify branch to report to"
+    echo "    SONAR_TOKER=                     	- set credential to access sonar server"
+    echo "    IGNORE_TESTS=                    	- ignore tests and coverage. NOT implemented"
+    echo "Example:"
+    echo " $(basename $0) myapp VERBOSE=1 (build target myapp with verbose)"
+}
+
+call_host()
+{
+    CMAKE_VOL=${CMAKE_VOL:-$PWD}
+
+    echo "Prepare dev environment"
+    if [ ! -f "$CMAKE_VOL/prepare_env.sh" ]; then
+        echo "The dir ($CMAKE_VOL) does not contain prepare_env.sh"
+    else
+        source $CMAKE_VOL/prepare_env.sh
+    fi
+
+    if [ "$1" = "docker" ]; then
+        shift
+        make -f $(cd $(dirname $0) && pwd -P)/../Makefile -C ${CMAKE_VOL} docker $@
+        exit 0
+    fi
+
+    if [ -z "$CMAKE_IMAGE" ]; then
+        IMAGES=(`find "${CMAKE_VOL}" -maxdepth 1 -name "*.dockerfile" -printf '%f\n' | grep -v - | tr '\n' '\0' | xargs -0 -n 1 -r basename -s .dockerfile`)
+        if [ ${#IMAGES[@]} -eq 0 ]; then
+            echo "No dockerimages in ${CMAKE_VOL}. Please set CMAKE_IMAGE var"
+            exit -1
+        elif [ ${#IMAGES[@]} -gt 1 ]; then
+            echo "Several base dockerimages found (${IMAGES[@]}) in $PWD. Please set CMAKE_IMAGE var"
+            exit -1
+        else
+            CMAKE_IMAGE=${IMAGES}_builder
+        fi
+    fi
+
+    CMAKE_IMAGE_BASE=${CMAKE_IMAGE%:*}
+    DOCKER_IMAGE=$CMAKE_IMAGE
+    DOCKER_WORKDIR="/workdir/${CMAKE_IMAGE_BASE}/${PWD#$CMAKE_VOL}"
+    DOCKER_VOLUMES+=";$CMAKE_VOL:/workdir/${CMAKE_IMAGE_BASE}"
+
+    CMAKE_ENABLE_REGISTRY=${CMAKE_ENABLE_REGISTRY:-true}
+    if [ $CMAKE_ENABLE_REGISTRY = "true" ]; then
+        DOCKER_REGISTRY_BASE_PATH=${HOME}/.cmake
+        DOCKER_REGISTRY_MAP_PATH=${DOCKER_REGISTRY_BASE_PATH}/cmake_docker.io
+        DOCKER_REGISTRY_PATH=$DOCKER_REGISTRY_BASE_PATH/registry
+        mkdir -p $DOCKER_REGISTRY_PATH
+        mkdir -p $DOCKER_REGISTRY_MAP_PATH
+        for ENTRY in "$DOCKER_REGISTRY_MAP_PATH"/*
+            do
+              [ -e "$ENTRY" ] || continue
+              [ ! -L "$ENTRY" ] && rm -rf "$ENTRY" && continue
+              REF=$(readlink -f "$ENTRY")
+              [ ! -d "$REF" ] && rm "$ENTRY" && continue
+              if [ $(basename $ENTRY) = $CMAKE_IMAGE_BASE ]; then
+                rm "$ENTRY"
+              else
+                DOCKER_VOLUMES+=";$REF:/workdir/$(basename $ENTRY)"
+              fi
+            done
+        ln -s $CMAKE_VOL $DOCKER_REGISTRY_MAP_PATH/$CMAKE_IMAGE_BASE
+        DOCKER_VOLUMES+=";$DOCKER_REGISTRY_PATH:/workdir/.cmake_registry"
+    fi
+    DOCKER_ENVS=";HOST_PATH=${CMAKE_VOL};CMAKE_IMAGE=${DOCKER_IMAGE}"
+}
+
+call_docker()
+{
+    cpus=$(grep ^processor /proc/cpuinfo | wc -l)
+
+    if [ -z "$CMAKE_IMAGE" ]; then
+        echo "Please set environment CMAKE_IMAGE. I.e. export CMAKE_IMAGE=cmake_builder:ubuntu20"
+        exit 1
+    fi
+
+    CMAKE_IMAGE_BASE=${CMAKE_IMAGE%:*}
+    WORKDIR=/workdir/${CMAKE_IMAGE_BASE}
+    BUILD_DIR=${WORKDIR}/build
+
+    if [ -f "${WORKDIR}/prepare_env.sh" ]; then
+        source ${WORKDIR}/prepare_env.sh
+    fi
+
+    mkdir -p ${BUILD_DIR}
+
+    case $1 in
+        dev)
+            shift
+            P=$@
+            cmake ${P} -DCMAKE_BUILD_TYPE=Debug -S ${WORKDIR} -B $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR
+            ;;
+        prod)
+            shift
+            P=$@
+            cmake ${P} -DCMAKE_BUILD_TYPE=Release -S ${WORKDIR} -B $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR
+            ;;
+        clean)
+            shift
+            make -j$cpus -C $BUILD_DIR clean
+            ;;
+        test)
+            shift
+            P=$@
+            cmake -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug -S ${WORKDIR} -B $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR test ARGS="--output-on-failure ${P}"
+            ;;
+        test_memcheck)
+            shift
+            #TODO need to do something with additional params
+            P=$@
+            cmake -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug -S ${WORKDIR} -B $BUILD_DIR
+            make -j$cpus -C  $BUILD_DIR
+            make -j$cpus -C  $BUILD_DIR test_memcheck
+            ;;
+        dry-run)
+            shift
+            P=$@
+            EXAMPLES=${WORKDIR}/examples
+            cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${EXAMPLES}/out -DBUILD_ALL=ON -B $BUILD_DIR/dry
+            make -j$cpus -C $BUILD_DIR/dry install
+            cmake -DCMAKE_PREFIX_PATH=${EXAMPLES}/out -DBUILD_ALL=ON -S ${EXAMPLES} -B  ${EXAMPLES}/build
+            make -j$cpus -C ${EXAMPLES}/build $P
+            ;;
+        coverage)
+            shift
+            P=$@
+            cmake -DBUILD_TESTING=ON -DBUILD_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug -S ${WORKDIR} -B $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR
+            make -C $BUILD_DIR test ARGS="--output-on-failure ${P}" || true
+            make -C $BUILD_DIR coverage
+            ;;
+        debug|dbg)
+            shift
+            P=$@
+            gdb $@
+            ;;
+        sonar_build)
+            shift
+            P=$@
+            rm -rf ${BUILD_DIR}/sonar
+            mkdir -p ${BUILD_DIR}/sonar
+            cmake ${P} -DBUILD_TESTING=ON -DBUILD_COVERAGE=ON -DBUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Debug -S ${WORKDIR} -B ${BUILD_DIR}/sonar
+            sonar-build-wrapper --out-dir ${BUILD_DIR}/sonar/bw-outputs \
+                                make -j$cpus -C ${BUILD_DIR}/sonar
+            ;;
+        sonar_test)
+            shift
+            P=$@
+            make -C $BUILD_DIR/sonar test ARGS="--output-on-failure -T test --no-compress-output ${P}" || true
+            make -C $BUILD_DIR/sonar coverage
+            ;;
+        sonar_scan)
+            shift
+            export $@
+            export SONAR_USER_HOME=${BUILD_DIR}/sonar/.sonar
+            if [ -n "${PR_ID}" ];
+            then
+                SONAR_BRANCH="
+                  -Dsonar.pullrequest.key=${PR_ID}
+                  -Dsonar.pullrequest.branch=${BRANCH}
+                  -Dsonar.pullrequest.base=${BASE_BRANCH}"
+            else
+                SONAR_BRANCH="
+                  -Dsonar.branch.name=${BRANCH}"
+            fi
+            sonar-build-scanner \
+                -Dsonar.host.url=https://sonar.softeq.com \
+                -Dsonar.coverageReportPaths=${BUILD_DIR}/sonar/Coverage/sonarcube.xml \
+                -Dsonar.cfamily.build-wrapper-output=${BUILD_DIR}/sonar/bw-outputs \
+                -Dsonar.login=${SONAR_TOKEN} \
+                ${SONAR_BRANCH}
+            ;;
+        package)
+            shift
+            P=$@
+            cmake ${P} -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -S ${WORKDIR} -B $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR
+            make -j$cpus -C $BUILD_DIR package
+            ;;
+        shell|--)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "Enterring shell"
+                bash
+            else
+                echo "Execute command '$@' by path '$PWD'"
+                $@
+            fi
+            ;;
+        build)
+            shift
+            ;&
+        *)
+            echo "Execute make by path $PWD with params: '$@'"
+            #GCC_COLORS= 
+            make -j$cpus -C $BUILD_DIR $@ 2>&1
+            ;;
+    esac
+}
+
+if [ "$(basename $0)" == "docker_launcher.sh" ]; then
+    call_docker $@
+              else
+    source $(cd $(dirname $0) && pwd -P)/../scripts/common-launcher $@
+fi

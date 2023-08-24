@@ -1,0 +1,66 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "inputs": [
+        {
+            "id": "binaryPath",
+            "type": "command",
+            "command": "shell-command.run",
+            "args": {
+                "cmd": "find",
+                "args": [
+                    "build",
+                    "-type",
+                    "f",
+                    "-executable",
+                    "-not",
+                    "-name",
+                    "'*.so*'",
+                    "-not",
+                    "-path",
+                    "'*CMake*'",
+                    "-print"
+                ],
+            }
+        }
+    ],
+    "configurations": [
+        {
+            "name": "Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${input:binaryPath}",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "/workdir/dbfacade-builder-image",
+            "environment": [],
+            "externalConsole": false,
+            "pipeTransport": {
+                "pipeCwd": "${workspaceRoot}",
+                "pipeProgram": "cmake_build",
+                "pipeArgs": [
+                    "shell",
+                ],
+                "pipeEnv": {
+                    "CMAKE_DOCKER_ARGS": "--rm -i"
+                }
+            },
+            /*            "logging": {
+                "trace": true,
+                "engineLogging": true
+            },*/
+            "sourceFileMap": {
+                "/workdir/dbfacade-builder-image": "${workspaceRoot}"
+            },
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+    ]
+}

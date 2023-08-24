@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote  name="yocto" fetch="https://git.yoctoproject.org/git/" />
+  <remote  name="openembedded" fetch="https://github.com/openembedded/"/>
+  <project path="sources/poky" name="poky" revision="dunfell" remote="yocto"/>
+  <project path="sources/meta-raspberrypi" name="meta-raspberrypi" revision="dunfell" remote="yocto"/>
+  <project path="sources/meta-openembedded" name="meta-openembedded" revision="dunfell" remote="openembedded"/>
+</manifest>

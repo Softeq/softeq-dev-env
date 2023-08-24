@@ -1,0 +1,43 @@
+#!/bin/bash
+echo "Flashing..."
+if [ $# -eq 0 ] || [ $# -ne 2 ]
+    then
+    echo "Specify device and image, please"
+    exit 0;
+ fi
+
+DEVICE="$1"
+IMAGE="$2"
+
+echo "$DEVICE"
+echo "$IMAGE"
+
+if [ ! -b "$DEVICE" ]; then
+     echo "$DEVICE is not a block device"
+     exit 0
+fi
+
+if [ ! -f "$IMAGE" ];then
+     echo "$IMAGE is not a file"
+     exit 0
+fi
+
+if [[ ! "$IMAGE" =~ "wic.xz" ]] && [[ ! "$IMAGE" =~ ".sdimg" ]]; then
+    echo "Incorrect image format "
+    exit 0;
+fi
+
+#umount device
+for  d in $(ls -1 $DEVICE*);do
+     sudo umount $d
+done
+
+if [[ $IMAGE == *wic.xz ]];then
+          xzcat $IMAGE | sudo dd of=$DEVICE bs=4M status=progress
+   elif [[ $IMAGE == *sdimg ]];then
+        sudo dd if=$IMAGE of=$DEVICE bs=4M status=progress
+fi
+
+sync
+exit 0;
+

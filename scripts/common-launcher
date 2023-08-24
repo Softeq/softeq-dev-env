@@ -1,0 +1,154 @@
+#!/bin/bash
+#
+# Common wrapper to run commands in the docker container
+#
+set -e
+
+sq_log()
+{
+    $act_silent || echo $@
+}
+sq_err()
+{
+    $act_silent || echo $@ >&2
+}
+
+act_silent=false
+DOCKER_INTERACTIVE_FLAGS="-i -t"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --gui)
+            DOCKER_ENVS+=";DISPLAY=${DISPLAY}"
+            DOCKER_VOLUMES+=";/tmp/.X11-unix:/tmp/.X11-unix"
+            # needed only for apps that require more than fb to work (ex. qml)
+            DOCKER_DEVS+=";/dev/dri"
+            shift
+            ;;
+        --silent)
+            act_silent=true
+            shift
+            ;;
+        --image)
+            DOCKER_IMAGE=$2
+            shift 2
+            ;;
+        --non-interactive)
+            DOCKER_INTERACTIVE=false
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# this script should only be sourced
+if [[ "$(basename -- "$0")" == "common-launcher" ]]; then
+    sq_err "Please do not run $0, source it"
+    exit 1
+elif [ "$1" = "--help" ]; then
+#TODO need to fix completion. It should sudgest completions from the begining if we reach the end of the line
+    echo "Usage: $(basename $0) [COMMAND] ..."
+    echo "Common launching arguments:"
+    echo "  --silent                           	- Do not write messages"
+    echo "  --gui                              	- Provide GUI support"
+    echo "  --image <DOCKER_IMAGE>             	- Force using docker image name"
+    echo "  --help                             	- gets this help"
+    echo "  --non-interactive                  	- stop docker from launching interactive pseudo terminal"
+    echo "The following are valid commands:"
+    call_help
+    exit 0
+fi
+
+#perform host actions from target script (sq-aosp-build/sq-yocto-build/sq-cmake-build)
+
+call_host "$@"
+
+# check if DOCKER_INTERACTIVE was set from ENV
+if [ -n "$DOCKER_INTERACTIVE" ]; then
+    if [ "$DOCKER_INTERACTIVE" = true ]; then
+        DOCKER_INTERACTIVE_FLAGS="-i -t"
+    else
+        DOCKER_INTERACTIVE_FLAGS=""
+    fi
+fi
+
+# Set uid and gid to match host current user as long as NOT root
+#TODO: should script forbid running under root?
+uid=$(id -u)
+if [ $uid -ne "0" ]; then
+    DOCKER_ENVS+=";USER_ID=$uid;GROUP_ID=$(id -g)"
+fi
+
+#Path existing ssh socket to docker for access to host keys fails build in socket not present
+if [ -S "$SSH_AUTH_SOCK" ]; then
+    DOCKER_VOLUMES+=";$SSH_AUTH_SOCK:/tmp/ssh_auth"
+    DOCKER_ENVS+=";SSH_AUTH_SOCK=/tmp/ssh_auth"
+else
+   echo "WARNING: SSH_AUTH_SOCK not set please run eval ssh-agend and add key to it"
+fi
+
+DOCKER_ARGS+=" --rm -h $DOCKER_IMAGE -v $(cd $(dirname $0) && pwd -P)/$(basename $0):/usr/local/bin/docker_launcher.sh:ro"
+
+#parse volumes and form parameter string
+set -f                             # avoid globbing (expansion of *).
+VOL_ARRAY=(${DOCKER_VOLUMES//;/ }) #split multipath string into array (expected "host_path1:docker_path1;host_path2/some:docker_path2;...")
+for path_pair in ${VOL_ARRAY[@]}
+do
+    path_arr=(${path_pair//:/ }) #split path pair into array for modifications (expected "path1:path2/someplace/some:...")
+    host_path=${path_arr[0]%/}   #clear trailing slash if present
+     #ensure path exists
+    [ -e "$host_path" ] && VOLUMES+=" -v $host_path:${path_arr[1]}"
+done
+DOCKER_VOLUMES=$VOLUMES
+
+#parse enviromental variables
+ENV_ARRAY=(${DOCKER_ENVS//;/ }) #split multivariable into array (expected "VAR1=somevalue;VAR2=somevalue:..."
+for env in ${ENV_ARRAY[@]}
+do
+    ENVIROMENT_VARS+=" -e $env"
+done
+DOCKER_ENVS=$ENVIROMENT_VARS
+
+#parse devices
+DEV_ARRAY=(${DOCKER_DEVS//;/ }) #split multivariable into array (expected "dev1;dev2;..."
+for dev in ${DEV_ARRAY[@]}
+do
+    DEVICES+=" --device=$dev"
+done
+DOCKER_DEVS=$DEVICES
+
+set +f
+
+#add parameter prefix to workdir if present and the length is not 0
+if ! [ -z "$DOCKER_WORKDIR" ]; then
+    DOCKER_WORKDIR="-w $DOCKER_WORKDIR"
+fi
+
+sq_log "Starting Softeq Development Environment $(basename $0)..."
+sq_log "DOCKER_ARGS: $DOCKER_ARGS"
+sq_log "DOCKER_EXTRA_ARGS: $DOCKER_EXTRA_ARGS"
+sq_log "DOCKER_WORKDIR: $DOCKER_WORKDIR"
+sq_log "DOCKER_VOLUMES: $DOCKER_VOLUMES"
+sq_log "DOCKER_ENVS: $DOCKER_ENVS"
+sq_log "DOCKER_DEVS: $DOCKER_DEVS"
+sq_log "DOCKER_INTERACTIVE: $DOCKER_INTERACTIVE_FLAGS"
+sq_log "DOCKER_IMAGE: $DOCKER_IMAGE"
+sq_log "Arguments from builder script: $@"
+
+# Look for the last argument, if it is shell or bash then it will stay in container
+# and there is no need to change the paths
+#SED_COMMAND=| sed -e "s|/workdir/${CMAKE_IMAGE_BASE}|${CMAKE_VOL}|"
+set +e
+
+docker run $DOCKER_INTERACTIVE_FLAGS $DOCKER_ARGS $DOCKER_EXTRA_ARGS \
+     $DOCKER_WORKDIR \
+     $DOCKER_VOLUMES \
+     $DOCKER_ENVS \
+     $DOCKER_DEVS \
+     $DOCKER_IMAGE bash docker_launcher.sh "$@"
+
+error=${PIPESTATUS[0]}
+sq_log "Docker container exits with code: $error"
+exit $error

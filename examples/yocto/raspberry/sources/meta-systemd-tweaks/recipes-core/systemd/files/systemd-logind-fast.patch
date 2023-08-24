@@ -1,0 +1,23 @@
+commit 2beee149ccee9e061bf9b7fc8ae2b35ca82280b5
+Author: Fake User <fake.user@yocto.com>
+Date:   Sat Jan 22 00:57:08 2022 +0300
+
+    Remove modprobe drm from systemd-logind service
+
+diff --git a/units/systemd-logind.service.in b/units/systemd-logind.service.in
+index ccbe631586..d039515950 100644
+--- a/units/systemd-logind.service.in
++++ b/units/systemd-logind.service.in
+@@ -24,12 +24,10 @@ BusName=org.freedesktop.login1
+ CapabilityBoundingSet=CAP_SYS_ADMIN CAP_MAC_ADMIN CAP_AUDIT_CONTROL CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_SYS_TTY_CONFIG CAP_LINUX_IMMUTABLE
+ DeviceAllow=block-* r
+ DeviceAllow=char-/dev/console rw
+-DeviceAllow=char-drm rw
+ DeviceAllow=char-input rw
+ DeviceAllow=char-tty rw
+ DeviceAllow=char-vcs rw
+ # Make sure the DeviceAllow= lines above can work correctly when referenceing char-drm
+-ExecStartPre=-/sbin/modprobe -abq drm
+ ExecStart=@rootlibexecdir@/systemd-logind
+ FileDescriptorStoreMax=512
+ IPAddressDeny=any

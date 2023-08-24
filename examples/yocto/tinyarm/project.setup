@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# this script should only be sourced
+if [ "$(basename -- "$0")" == "project.setup" ]; then
+    echo "Please do not run $0, source it" >&2
+    exit 1
+fi
+
+YOCTO_CONF_VERSION="0.1"
+BUILDDIR=build
+
+function do_init
+{
+    # Clean up the configuration if it exists
+    rm -rf $BUILDDIR/conf > /dev/null 2>&1
+
+    repo init -u file://$PWD/manifest.xml --standalone-manifest
+}
+
+function do_state
+{
+    if [ -d ".repo" ];then
+        repo status
+    else
+        echo empty
+    fi
+}
+
+function do_workspace
+{
+    bitbake-layers add-layer \
+      ../sources/meta-openembedded/meta-oe
+}
+
+function do_sync
+{
+    repo sync
+}
+
+function do_clean
+{
+    if [ "$1" == "all" ]; then
+        rm -rf ".repo" > /dev/null 2>&1
+    fi
+    rm -rf $BUILDDIR > /dev/null 2>&1
+}
+
+function do_prepare
+{
+    export MACHINE=qemuarm
+    export DISTRO=poky-tiny
+    source sources/poky/oe-init-build-env $BUILDDIR
+}
+
+function do_build
+{
+    bitbake core-image-minimal
+}

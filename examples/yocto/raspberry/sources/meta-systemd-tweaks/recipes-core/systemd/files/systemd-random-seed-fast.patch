@@ -1,0 +1,12 @@
+diff --git a/units/systemd-random-seed.service.in b/units/systemd-random-seed.service.in
+index c64e8a9091..62e5a71592 100644
+--- a/units/systemd-random-seed.service.in
++++ b/units/systemd-random-seed.service.in
+@@ -18,6 +18,7 @@ Before=shutdown.target
+ ConditionVirtualization=!container
+ 
+ [Service]
++Environment="SYSTEMD_RANDOM_SEED_CREDIT=yes"
+ Type=oneshot
+ RemainAfterExit=yes
+ ExecStart=@rootlibexecdir@/systemd-random-seed load

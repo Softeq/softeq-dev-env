@@ -1,0 +1,158 @@
+#!/bin/bash
+
+set -e
+
+AOSP_CCACHE_BIN=${AOSP_CCACHE_BIN:-prebuilts/misc/linux-x86/ccache/ccache}
+
+setup_ccache() {
+    if [ ! -f $AOSP_CCACHE_BIN ]; then
+        return
+    fi
+
+    export CCACHE_DIR=/tmp/ccache
+    export USE_CCACHE=1
+}
+
+delete_ccache() {
+    if [ ! -f $AOSP_CCACHE_BIN ]; then
+        return
+    fi
+
+    $AOSP_CCACHE_BIN -C
+}
+
+create_ccache() {
+    if [ ! -f $AOSP_CCACHE_BIN ]; then
+        return
+    fi
+
+    echo -e "\nINFO: Setting CCACHE with 10 GB\n"
+    setup_ccache
+    delete_ccache
+    $AOSP_CCACHE_BIN -M 10G
+}
+
+call_help()
+{
+    # Commands and parameters list is used by bash completition
+    # See ../scripts/completion.bash for more info
+    echo "  m [<make_params>]                  	- Runs builds from the top of the tree"
+    echo "  mma [<make_params>]                	- Builds all of the modules in the current directory, and their dependencies"
+    echo "  mmma [<make_params>]               	- Builds all of the modules in the supplied directories, and their dependencies"
+    echo "  emulator [<emulator_params>]       	- run emulator NOT_IMPLEMENTED"
+    echo "  shell|-- [<CMD>]                   	- launches shell inside the docker with optional command CMD"
+    echo "  sync [<sync_params>]               	- sync sources"
+    echo "  <sync_params>                      	- sync parameters"
+    echo "    state                            	- check initial sync"
+    echo "    force                            	- force resync NOT_IMPLEMENTED"
+}
+
+call_host()
+{
+    AOSP_VOL=${AOSP_VOL:-$PWD}
+    if [ -z "$DOCKER_IMAGE" ]; then
+        echo "Please set environment AOSP_IMAGE. I.e. export DOCKER_IMAGE=android_builder:aosp8"
+        exit
+    fi
+
+    # append pwd to extra args to run command in current path
+    if [ "$1" = "--" ]; then
+        if [[ ! $PWD =~ ^$AOSP_VOL ]]; then
+            echo "You are not inside $AOSP_VOL"
+            exit 1
+        fi
+        DOCKER_WORKDIR="/aosp${PWD#$AOSP_VOL}"
+    fi
+
+    DOCKER_VOLUMES+=";${AOSP_VOL}:/aosp"
+
+    AOSP_OUT_DIR=${AOSP_OUT_DIR:-out}
+    AOSP_OUT_DIR=${AOSP_OUT_DIR%/} # Trim trailing slash if needed (edited)
+    DOCKER_ENVS+=";OUT_DIR=$AOSP_OUT_DIR"
+
+    AOSP_VOL_CCACHE=${AOSP_VOL_CCACHE:-$AOSP_VOL/$AOSP_OUT_DIR/ccache}
+    AOSP_VOL_CCACHE=${AOSP_VOL_CCACHE%/} # Trim trailing slash if needed
+    mkdir -p "$AOSP_VOL_CCACHE"
+    DOCKER_VOLUMES+=";$AOSP_VOL_CCACHE:/tmp/ccache"
+    DOCKER_DEVS+=";/dev/kvm"
+}
+
+call_docker()
+{
+    cpus=$(grep ^processor /proc/cpuinfo | wc -l)
+    pushd /aosp > /dev/null 2>&1
+    # if android emulator them sync is not mandatory
+    if [ ! -x "sync.sh" ] && [ "$*" != "emulator" ]; then
+        echo "The dir does not contain sync.sh. Can't download sources"
+        exit 1
+    fi
+
+    if [ "$#" -eq 0 ]; then
+        echo "Build default target"
+        # check for existing sources and do sync as needed
+        STATE=$(./sync.sh state)
+        if [ "$STATE" == "empty" ]; then
+            echo "'$PWD' dir does not contain sources. Syncing.."
+            ./sync.sh
+            create_ccache
+        fi
+        ./build_target.sh
+        exit $?
+    fi
+    echo "Prepare AOSP dev environment"
+    setup_ccache
+    source prepare_env.sh || echo "WARNING: Something wrong with environment"
+
+    case $1 in
+        shell|--)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "Enterring shell"
+                bash
+            else
+                popd > /dev/null 2>&1
+                echo "Execute command '$@' by path '$PWD'"
+                $@
+            fi
+            ;;
+        sync)
+            shift
+            ./sync.sh $@
+            ;;
+        emulator)
+            shift
+            AVD=/emulator/android-sdk-linux/cmdline-tools/8.0/bin/avdmanager
+            EMULATOR=/emulator/android-sdk-linux/emulator/emulator
+            device=pixel_3
+            avd_device=${device}_avd
+            if test -f "$AVD"; then
+                echo "Creating Android device emulator"
+                $AVD create avd --force --name $avd_device --abi google_apis/x86_64 --package "system-images;android-29;google_apis;x86_64" --device $device
+                if test -f "$EMULATOR"; then
+                    if $AVD list avd   | grep -q $avd_device; then
+                        echo "Running Android " $device  " emulator"
+                        $EMULATOR @$avd_device  -no-audio -no-cache -no-snapshot &
+                        bash
+                    else
+                        echo "Emulator device creation failed"
+                    fi
+                else
+                    echo "No Emulator installed"
+                fi
+            else
+                echo "No Avdmanager installed"
+            fi
+            ;;
+        *)
+            echo "Execute make by path $PWD with params: '$@'"
+            make $@ 2>&1 | tee build.out
+            exit ${PIPESTATUS[0]}
+            ;;
+    esac
+}
+
+if [ "$(basename $0)" == "docker_launcher.sh" ]; then
+    call_docker $@
+else
+    source $(cd $(dirname $0) && pwd -P)/../scripts/common-launcher $@
+fi

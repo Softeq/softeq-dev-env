@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <default revision="dunfell" sync-j="4"/>
+  <remote  name="yocto" fetch="https://git.yoctoproject.org/git/" />
+  <remote  name="openembedded" fetch="https://github.com/openembedded/"/>
+  <project path="sources/poky" name="poky" remote="yocto"/>
+  <project path="sources/meta-arm" name="meta-arm" remote="yocto"/>
+  <project path="sources/meta-ti" name="meta-ti" remote="yocto"/>
+  <project path="sources/meta-openembedded" name="meta-openembedded" remote="openembedded"/>
+</manifest>

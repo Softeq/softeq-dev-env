@@ -1,0 +1,10 @@
+--- a/sources/meta-flutter/classes/flutter-app.bbclass
++++ b/sources/meta-flutter/classes/flutter-app.bbclass
+@@ -228,6 +228,7 @@
+         #
+         ${S}/engine_sdk/sdk/clang_x64/gen_snapshot \
+             --deterministic \
++            --no-use-integer-division \
+             --snapshot_kind=app-aot-elf \
+             --elf=libapp.so \
+             --strip \

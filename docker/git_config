@@ -1,0 +1,13 @@
+[user]
+	name = Fake User
+	email = fake.user@example.com
+[color]
+	ui = auto
+[core]
+	packedGitLimit = 640m
+	packedGitWindowSize = 640m
+	preloadIndex = false
+[pack]
+ 	deltaCacheSize = 640m
+	packSizeLimit = 640m
+	windowMemory = 640m

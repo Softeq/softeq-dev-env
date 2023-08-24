@@ -1,0 +1,52 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "docker",
+            "type": "shell",
+            "command": "sq-cmake-build docker",
+            "problemMatcher": [],
+            "detail": "Build CMake-Docker",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "debug",
+            "type": "shell",
+            "command": "sq-cmake-build dev",
+            "problemMatcher": [],
+            "detail": "Build Debug",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "release",
+            "type": "shell",
+            "command": "sq-cmake-build dev",
+            "problemMatcher": [],
+            "detail": "Build Release",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "configure",
+            "type": "shell",
+            "command": "sq-cmake-build edit_cache",
+            "detail": "Configure CMAKE options",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            },
+            "problemMatcher": []
+        }
+    ],
+}
